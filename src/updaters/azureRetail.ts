@@ -14,6 +14,12 @@ type ItemsJson = {
     nextPageToken: string;
 };
 
+type PageJson = {
+    currentPageLink: string;
+    nextPageLink: string;
+    count: string;
+};
+
 type ProductJson = {
     currencyCode: string;
     effectiveStartDate: string;
@@ -35,55 +41,90 @@ type ProductJson = {
 };
 
 async function update(): Promise<void> {
-    await download();
-    await load();
+    await downloadAll();
+    // await load();
 }
 
-async function download(): Promise<void> {
-    config.logger.info(`Downloading Items...`);
+async function downloadAll() {
+    config.logger.info(`Downloading All Items...`);
 
-    let resp: AxiosResponse | null = null;
-    let success = false;
-    let attempts = 0;
+    // const pages = await getPages();
+    // for (const page of pages){
+    //     try {
+    //         download(page)
+    //     } catch (e) {
+    //         config.logger.error(
+    //           `Skipping page ${page.currentPageLink} due to error ${e}`
+    //         );
+    //         config.logger.error(e.stack);
+    //     }
+    // }
 
+    const test: PageJson = {
+        currentPageLink: `https://prices.azure.com:443/api/retail/prices?$skip=159700`,
+        nextPageLink: ``,
+        count: `100`,
+    };
+    download(test)
+}
+
+async function download(page: PageJson): Promise<void> {
+    config.logger.info(`Downloading Item Page ${page.currentPageLink}`);
+
+    const count = 100;
     do {
-        try {
-            attempts++;
-            resp = await axios({
-                method: 'get',
-                url: `${baseUrl}`,
-                responseType: 'stream',
-            });
-            success = true;
-        } catch (err) {
-            // Too many requests, sleep and retry
-            if (err.response.status === 429) {
-                config.logger.info(
-                    'Too many requests, sleeping for 30s and retrying'
-                );
-                await sleep(30000);
-            } else {
-                throw err;
+
+        const currentPageLink = `${page.currentPageLink}`;
+        
+        let resp: AxiosResponse | null = null;
+        let success = false;
+        let attempts = 0;
+
+        do {
+            try {
+                attempts++;
+                config.logger.info(`How are things ${baseUrl}`);
+                resp = await axios({
+                    method: 'get',
+                    url: `${baseUrl}`,
+                    responseType: 'stream',
+                });
+                config.logger.info(`How are things ${baseUrl}`);
+                success = true;
+            } catch (err) {
+                // Too many requests, sleep and retry
+                if (err.response.status === 429) {
+                    config.logger.info(
+                        'Too many requests, sleeping for 30s and retrying'
+                    );
+                    await sleep(30000);
+                } else {
+                    throw err;
+                }
             }
+        } while (!success && attempts < 3);
+
+        if (!resp) {
+            config.logger.error(
+                `Failed to get a response from the API`
+            );
+            return;
         }
-    } while (!success && attempts < 3);
 
-    if (!resp) {
-        return;
-    }
+        let filename = `az-items-${currentPageLink}`;
+        filename = filename.replace(/\//g, '-');
+        filename = filename.replace(/\./g, '-');
+        filename = filename.replace(/:/g, '-');
+        filename = `data/${filename}.json`;
 
-    let filename = `az-items`;
-    filename = filename.replace(/\//g, '-');
-    filename = filename.replace(/\./g, '-');
+        const writer = fs.createWriteStream(filename);
+        resp.data.pipe(writer);
+        await new Promise((resolve) => {
+            writer.on('finish', resolve);
+        });
+        config.logger.info(`Downloaded json file.`);
 
-    filename = `data/${filename}.json`;
-    const writer = fs.createWriteStream(filename);
-    resp.data.pipe(writer);
-    await new Promise((resolve) => {
-        writer.on('finish', resolve);
-    });
-    config.logger.info(`Downloaded json file.`);
-
+    } while (count === 100);
 }
 
 async function load(): Promise<void> {
@@ -96,6 +137,47 @@ async function load(): Promise<void> {
             config.logger.error(e.stack);
         }
     }
+}
+
+async function getPages(): Promise<PageJson[]> {
+    config.logger.info(`Getting Pages. This can take time...`);
+
+    const pages: PageJson[] = [];
+
+    let count = 100;
+    let currentPageLink = '';
+    do {
+
+        if (!currentPageLink) {
+            currentPageLink = `${baseUrl}`;
+        }
+
+        config.logger.info(`Getting Info for ${currentPageLink}`);
+        const resp = await axios.get(
+            `${currentPageLink}`
+        );
+
+        const page: PageJson = {
+            currentPageLink: `${currentPageLink}`,
+            nextPageLink: resp.data.NextPageLink,
+            count: resp.data.Count,
+        };
+
+        pages.push(page);
+
+        // currentPageLink: string;
+        // nextPageLink: string;
+        // count: string;
+
+        // pages.push(...(<PageJson[]>resp.data.Count));
+        // pages.push(...(<PageJson[]>resp.data.NextPageLink));
+
+        count = resp.data.Count;
+        currentPageLink = resp.data.NextPageLink;
+
+    } while (count === 100);
+
+    return pages;
 }
 
 async function processFile(filename: string): Promise<void> {
@@ -134,18 +216,18 @@ function parseProduct(productJson: ProductJson): Product {
 function parsePrices(product: Product, productJson: ProductJson): Price[] {
     const prices: Price[] = [];
 
-            const price: Price = {
-                priceHash: '',
-                purchaseOption: productJson.type,
-                unit: productJson.unitOfMeasure,
-                USD: `${productJson.unitPrice}`,
-                effectiveDateStart: productJson.effectiveStartDate,
-                startUsageAmount: productJson.retailPrice
-            };
+    const price: Price = {
+        priceHash: '',
+        purchaseOption: productJson.type,
+        unit: productJson.unitOfMeasure,
+        USD: `${productJson.unitPrice}`,
+        effectiveDateStart: productJson.effectiveStartDate,
+        startUsageAmount: productJson.retailPrice
+    };
 
-            price.priceHash = generatePriceHash(product, price);
+    price.priceHash = generatePriceHash(product, price);
 
-            prices.push(price);
+    prices.push(price);
 
     return prices;
 }
